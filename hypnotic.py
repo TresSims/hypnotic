@@ -1,5 +1,8 @@
-import hou
 import logging
+
+import hou
+from marshmallow import Schema, ValidationError, fields
+
 from .util import calcHash
 
 
@@ -7,8 +10,10 @@ class Hypnotic:
     def __init__(self, hipFile, schema=None):
         self.hipFile = hipFile
         self.hipFileHash = None
+        self.controls = None
+        self.out = None
 
-        hash = self._loadHip(self.hipFile)
+        self._loadHip(self.hipFile)
 
         if schema:
             self.controlSchema = schema
@@ -18,11 +23,26 @@ class Hypnotic:
     def _generateSchema(self):
         """
         Scan the control node to generate a validation schema for incoming data.
-        Not implemented.
         """
-        parms = self.controls.parms()
+        if self.controls:
+            parms = self.controls.parms()
+        else:
+            logging.error("No control node in object. Is the hip file initialized?")
+            return
+
         schemaDict = {}
-        logging.error("not implemented")
+        for parm in parms:
+            value = parm.eval()
+            if isinstance(value, str):
+                schemaDict[parm.name()] = fields.String(required=False)
+            elif isinstance(value, int):
+                schemaDict[parm.name()] = fields.Integer(required=False)
+            elif isinstance(value, float):
+                schemaDict[parm.name()] = fields.Float(required=False)
+            else:
+                logging.info(f"Skipping parameter {parm.name()} of unrecognized type")
+
+        self.controlSchema = Schema.from_dict(schemaDict)
 
     def _loadHip(self, file=None, hash=None):
         """
@@ -71,13 +91,28 @@ class Hypnotic:
         if self._detectChanges():
             self._loadHip()
 
+    def _validateControls(self, controls):
+        """
+        Ensure passed parameters will fit in the control node
+        """
+
+        try:
+            self.controlSchema.load(controls)
+            return True
+        except ValidationError as err:
+            logging.error(f"Controls did not pass Hypnotic validation.\n{err.messages}")
+            return False
+
     def _writeControls(self, controls):
         """
         Write the parameters from a json request into the control node.
         """
         self._reloadIfChanged()
-        validatedControls = self._validateControls(controls)
-        self.controls.setParms(validatedControls)
+        controlsAreValid = self._validateControls(controls)
+        if controlsAreValid:
+            self.controls.setParms(controls)
+        else:
+            logging.error("Could not write controls. Reason: Invalid controls")
 
     def exportPrintFile(self, controls):
         """
